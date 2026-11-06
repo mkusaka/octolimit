@@ -188,6 +188,18 @@ export default function Dashboard({ limits }: { limits: LimitsResult }) {
     onFinish: () => setLoading(false),
   };
   usePoll(60_000, reloadOptions);
+  // Refresh when coming back to the tab/app; mobile PWAs fire visibilitychange rather than focus.
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === "visible") router.reload(reloadOptions);
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, []);
 
   const primary = lastOk?.resources.filter((r) => PRIORITY.includes(r.name)) ?? [];
   const secondary = lastOk?.resources.filter((r) => !PRIORITY.includes(r.name)) ?? [];
