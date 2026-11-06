@@ -1,5 +1,6 @@
 import { createInertiaApp, type ResolvedComponent } from "@inertiajs/react";
 import { createRoot } from "react-dom/client";
+import { registerSW } from "virtual:pwa-register";
 
 const pages = import.meta.glob<{ default: ResolvedComponent }>("./pages/*.tsx");
 
@@ -9,3 +10,5 @@ void createInertiaApp({
     createRoot(el).render(<App {...props} />);
   },
 });
+
+registerSW({ immediate: true });
