@@ -1,0 +1,39 @@
+{
+  "name": "octolimit",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "bun run build && vite preview",
+    "deploy": "bun run build && wrangler deploy",
+    "test": "bun test",
+    "check": "tsc --noEmit && oxlint && oxfmt --check",
+    "fmt": "oxfmt"
+  },
+  "dependencies": {
+    "@hono/inertia": "^0.8.1",
+    "@hono/session": "^0.2.2",
+    "@inertiajs/react": "^3.11.0",
+    "@tanstack/redact": "^0.3.1",
+    "hono": "^4.13.16",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.67.0",
+    "@cloudflare/workers-types": "^5.20261106.1",
+    "@tailwindcss/vite": "^4.3.5",
+    "@types/bun": "^1.4.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "oxfmt": "^0.77.0",
+    "oxlint": "^1.92.0",
+    "tailwindcss": "^4.3.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.6",
+    "vite-ssr-components": "^0.9.0",
+    "wrangler": "^4.158.0"
+  },
+  "packageManager": "bun@1.4.4"
+}

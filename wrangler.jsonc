@@ -1,0 +1,6 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "octolimit",
+  "compatibility_date": "2026-11-01",
+  "main": "./app/server.ts",
+}
