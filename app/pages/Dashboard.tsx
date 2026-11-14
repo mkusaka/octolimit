@@ -112,6 +112,8 @@ function appendSamples(prev: History, data: OkLimits): History {
 }
 
 // Samples are timestamped and may be unevenly spaced (manual refresh), so rates are per time, not per sample.
+const HISTORY_KEY = "octolimit:history";
+
 const RECENT_MS = 10 * 60_000;
 const MIN_SPAN_MS = 60_000;
 /** GitHub primary rate-limit windows; the window starts `windowMs` before `reset`. */
@@ -298,8 +300,10 @@ function UsageChart({ r, samples }: { r: RateLimit; samples: Sample[] }) {
                   ~{time(hitAt)} (in{" "}
                   {formatCountdown(Math.max(0, Math.round((hitAt - last.t) / 1000)))})
                 </span>
+              ) : hitAt === Infinity ? (
+                "Not reached at current pace"
               ) : (
-                "Not reached before reset"
+                `~${time(hitAt)} (${Math.round((hitAt - resetMs) / 60_000)} min after reset)`
               )}
             </dd>
             <dt>At reset</dt>
@@ -329,7 +333,7 @@ const iconProps = {
 const buttonClass =
   "inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 shadow-sm transition hover:bg-zinc-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-400 disabled:opacity-60 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800";
 
-function CopyJsonButton({ raw }: { raw: unknown }) {
+function CopyJsonButton({ raw, label = "Copy JSON" }: { raw: unknown; label?: string }) {
   const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
   useEffect(() => {
     if (state === "idle") return;
@@ -353,7 +357,7 @@ function CopyJsonButton({ raw }: { raw: unknown }) {
           </>
         )}
       </svg>
-      {state === "copied" ? "Copied" : state === "failed" ? "Copy failed" : "Copy JSON"}
+      {state === "copied" ? "Copied" : state === "failed" ? "Copy failed" : label}
     </button>
   );
 }
@@ -364,10 +368,32 @@ export default function Dashboard({ limits }: { limits: LimitsResult }) {
   // Keep showing the last good data when a refresh fails.
   const [lastOk, setLastOk] = useState<OkLimits | null>(limits.ok ? limits : null);
 
-  // In-memory only: lost on reload.
   const [history, setHistory] = useState<History>(() =>
     limits.ok ? appendSamples({}, limits) : {},
   );
+  // Restore samples saved by earlier page loads (client only; storage may be unavailable).
+  // Declared before the save effect so the first save doesn't drop what was stored.
+  useEffect(() => {
+    let stored: History;
+    try {
+      stored = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? "{}");
+    } catch {
+      return;
+    }
+    setHistory((h) => {
+      const merged: History = {};
+      for (const [key, samples] of Object.entries(h)) {
+        const old = Array.isArray(stored[key]) ? stored[key] : [];
+        merged[key] = [...old.filter((s) => s.t < (samples[0]?.t ?? Infinity)), ...samples];
+      }
+      return merged;
+    });
+  }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+    } catch {}
+  }, [history]);
 
   useEffect(() => {
     if (!limits.ok) return;
@@ -435,6 +461,22 @@ export default function Dashboard({ limits }: { limits: LimitsResult }) {
             </p>
           </div>
           <div className="flex gap-2">
+            {lastOk && (
+              <CopyJsonButton
+                label="Copy history"
+                raw={Object.entries(history).map(([key, samples]) => {
+                  const [resource, reset] = key.split(":");
+                  return {
+                    resource,
+                    reset: new Date(Number(reset) * 1000).toISOString(),
+                    samples: samples.map((s) => ({
+                      at: new Date(s.t).toISOString(),
+                      used: s.used,
+                    })),
+                  };
+                })}
+              />
+            )}
             {lastOk && <CopyJsonButton raw={lastOk.raw} />}
             <button
               type="button"
