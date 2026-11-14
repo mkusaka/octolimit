@@ -59,7 +59,7 @@ function Reset({ r, now }: { r: RateLimit; now: number }) {
   );
 }
 
-function PrimaryCard({ r, now }: { r: RateLimit; now: number }) {
+function PrimaryCard({ r, now, samples }: { r: RateLimit; now: number; samples: Sample[] }) {
   const { text, rate } = tone(r);
   return (
     <li className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
@@ -86,6 +86,7 @@ function PrimaryCard({ r, now }: { r: RateLimit; now: number }) {
             </span>
           </p>
           <Meter r={r} className="mt-4" />
+          <UsageChart r={r} samples={samples} />
         </>
       )}
       <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
@@ -95,30 +96,155 @@ function PrimaryCard({ r, now }: { r: RateLimit; now: number }) {
   );
 }
 
-function SecondaryRow({ r, now }: { r: RateLimit; now: number }) {
-  const { text } = tone(r);
+type Sample = { t: number; used: number };
+type History = Record<string, Sample[]>;
+
+/** Samples within the current reset window, so a reset doesn't skew the slope. */
+function appendSamples(prev: History, data: OkLimits): History {
+  const next: History = {};
+  for (const r of data.resources.filter((r) => PRIORITY.includes(r.name))) {
+    const key = `${r.name}:${r.reset}`;
+    const old = prev[key] ?? [];
+    next[key] =
+      old.at(-1)?.t === data.fetchedAt ? old : [...old, { t: data.fetchedAt, used: r.used }];
+  }
+  return next;
+}
+
+// Samples are timestamped and may be unevenly spaced (manual refresh), so rates are per time, not per sample.
+const RECENT_MS = 10 * 60_000;
+const MIN_SPAN_MS = 60_000;
+/** GitHub primary rate-limit windows; the window starts `windowMs` before `reset`. */
+const WINDOW_MS: Record<string, number> = { core: 3_600_000, graphql: 3_600_000, search: 60_000 };
+
+/** used/ms between the oldest sample within RECENT_MS of the latest one and the latest one. */
+export function recentRate(samples: Sample[]): { rate: number; spanMs: number } | null {
+  const last = samples.at(-1);
+  if (!last) return null;
+  const first = samples.find((s) => s.t >= last.t - RECENT_MS)!;
+  const spanMs = last.t - first.t;
+  if (spanMs < MIN_SPAN_MS) return null;
+  return { rate: Math.max(0, (last.used - first.used) / spanMs), spanMs };
+}
+
+/** used/ms since the window started; works from a single sample. */
+function windowRate(r: RateLimit, last: Sample): number | null {
+  const windowMs = WINDOW_MS[r.name];
+  if (!windowMs) return null;
+  const elapsed = last.t - (r.reset * 1000 - windowMs);
+  return elapsed > 0 ? last.used / elapsed : null;
+}
+
+const perMin = (rate: number) => `+${Math.round(rate * 60_000).toLocaleString()}/min`;
+
+function UsageChart({ r, samples }: { r: RateLimit; samples: Sample[] }) {
+  if (r.limit === 0 || samples.length === 0) return null;
+  const last = samples.at(-1)!;
+  const recent = recentRate(samples);
+  const avg = windowRate(r, last);
+  const rate = recent?.rate ?? avg;
+  const resetMs = r.reset * 1000;
+  const hitAt = rate ? last.t + (r.limit - last.used) / rate : Infinity;
+  const projEnd = Math.min(hitAt, resetMs);
+  const projUsed =
+    rate === null ? last.used : Math.min(r.limit, last.used + rate * (projEnd - last.t));
+  const atReset = rate === null ? null : Math.min(r.limit, last.used + rate * (resetMs - last.t));
+
+  const W = 300;
+  const H = 64;
+  const windowMs = WINDOW_MS[r.name];
+  const t0 = Math.min(samples[0].t, windowMs ? resetMs - windowMs : samples[0].t);
+  const t1 = Math.max(resetMs, last.t + 1);
+  const x = (t: number) => ((t - t0) / (t1 - t0)) * W;
+  const y = (u: number) => H - (Math.min(u, r.limit) / r.limit) * H;
+  const time = (ms: number) =>
+    new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
   return (
-    <li className="grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-1.5 px-4 py-3 sm:grid-cols-[minmax(0,17rem)_1fr_7rem]">
-      <span className="truncate font-mono text-sm" title={r.name}>
-        {r.name}
-      </span>
-      {r.limit === 0 ? (
-        <span className="text-right text-xs text-zinc-400 sm:order-last dark:text-zinc-500">
-          Unavailable
-        </span>
-      ) : (
-        <span className={`text-right text-sm tabular-nums sm:order-last ${text}`}>
-          {r.remaining.toLocaleString()}
-          <span className="text-zinc-400 dark:text-zinc-500"> / {r.limit.toLocaleString()}</span>
-        </span>
-      )}
-      <div className="col-span-2 flex items-center gap-3 sm:col-span-1">
-        {r.limit > 0 && <Meter r={r} className="w-24 shrink-0" />}
-        <span className="truncate text-xs text-zinc-500 dark:text-zinc-400">
-          <Reset r={r} now={now} />
-        </span>
-      </div>
-    </li>
+    <div className="mt-4">
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="none"
+        className="h-16 w-full overflow-visible"
+        role="img"
+        aria-label={`${r.name} usage history`}
+      >
+        <line
+          x1={0}
+          x2={W}
+          y1={0}
+          y2={0}
+          className="stroke-rose-500/50"
+          strokeDasharray="2 3"
+          vectorEffect="non-scaling-stroke"
+        />
+        <line
+          x1={0}
+          x2={W}
+          y1={H}
+          y2={H}
+          className="stroke-zinc-300 dark:stroke-zinc-700"
+          vectorEffect="non-scaling-stroke"
+        />
+        {rate !== null && (
+          <line
+            x1={x(last.t)}
+            y1={y(last.used)}
+            x2={x(projEnd)}
+            y2={y(projUsed)}
+            className="stroke-zinc-400 dark:stroke-zinc-500"
+            strokeDasharray="4 3"
+            strokeWidth={1.5}
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
+        <polyline
+          points={samples.map((s) => `${x(s.t)},${y(s.used)}`).join(" ")}
+          fill="none"
+          className="stroke-emerald-500"
+          strokeWidth={2}
+          strokeLinejoin="round"
+          vectorEffect="non-scaling-stroke"
+        />
+        {samples.map((s) => (
+          <circle key={s.t} cx={x(s.t)} cy={y(s.used)} r={1.5} className="fill-emerald-500" />
+        ))}
+      </svg>
+      <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-zinc-500 dark:text-zinc-400">
+        <dt>Recent</dt>
+        <dd className="tabular-nums">
+          {recent
+            ? `${perMin(recent.rate)} (last ${Math.round(recent.spanMs / 60_000)}m)`
+            : "Collecting data…"}
+        </dd>
+        {avg !== null && (
+          <>
+            <dt>Window avg</dt>
+            <dd className="tabular-nums">{perMin(avg)}</dd>
+          </>
+        )}
+        {rate !== null && (
+          <>
+            <dt>Limit</dt>
+            <dd className="tabular-nums">
+              {hitAt <= resetMs ? (
+                <span className="text-rose-600 dark:text-rose-400">
+                  ~{time(hitAt)} (in{" "}
+                  {formatCountdown(Math.max(0, Math.round((hitAt - last.t) / 1000)))})
+                </span>
+              ) : (
+                "Not reached before reset"
+              )}
+            </dd>
+            <dt>At reset</dt>
+            <dd className="tabular-nums">
+              ~{Math.round(atReset!).toLocaleString()} used (
+              {Math.round((atReset! / r.limit) * 100)}%)
+            </dd>
+          </>
+        )}
+      </dl>
+    </div>
   );
 }
 
@@ -172,8 +298,15 @@ export default function Dashboard({ limits }: { limits: LimitsResult }) {
   // Keep showing the last good data when a refresh fails.
   const [lastOk, setLastOk] = useState<OkLimits | null>(limits.ok ? limits : null);
 
+  // In-memory only: lost on reload.
+  const [history, setHistory] = useState<History>(() =>
+    limits.ok ? appendSamples({}, limits) : {},
+  );
+
   useEffect(() => {
-    if (limits.ok) setLastOk(limits);
+    if (!limits.ok) return;
+    setLastOk(limits);
+    setHistory((h) => appendSamples(h, limits));
   }, [limits]);
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -202,7 +335,6 @@ export default function Dashboard({ limits }: { limits: LimitsResult }) {
   }, []);
 
   const primary = lastOk?.resources.filter((r) => PRIORITY.includes(r.name)) ?? [];
-  const secondary = lastOk?.resources.filter((r) => !PRIORITY.includes(r.name)) ?? [];
 
   return (
     <div className="min-h-dvh">
@@ -266,22 +398,14 @@ export default function Dashboard({ limits }: { limits: LimitsResult }) {
         {primary.length > 0 && (
           <ul className="mt-6 grid gap-4 sm:grid-cols-3">
             {primary.map((r) => (
-              <PrimaryCard key={r.name} r={r} now={now} />
+              <PrimaryCard
+                key={r.name}
+                r={r}
+                now={now}
+                samples={history[`${r.name}:${r.reset}`] ?? []}
+              />
             ))}
           </ul>
-        )}
-
-        {secondary.length > 0 && (
-          <section className="mt-10">
-            <h2 className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
-              Other resources
-            </h2>
-            <ul className="mt-3 divide-y divide-zinc-200 overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm dark:divide-zinc-800 dark:border-zinc-800 dark:bg-zinc-900">
-              {secondary.map((r) => (
-                <SecondaryRow key={r.name} r={r} now={now} />
-              ))}
-            </ul>
-          </section>
         )}
       </main>
     </div>
