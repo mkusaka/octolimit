@@ -3,4 +3,6 @@
   "name": "octolimit",
   "compatibility_date": "2026-11-01",
   "main": "./app/server.ts",
+  // Required by `wrangler preview`, which Workers Builds runs for non-production branches.
+  "previews": {},
 }
