@@ -137,7 +137,10 @@ function windowRate(r: RateLimit, last: Sample): number | null {
 
 const perMin = (rate: number) => `+${Math.round(rate * 60_000).toLocaleString()}/min`;
 
+type HoverPoint = Sample & { projected: boolean };
+
 function UsageChart({ r, samples }: { r: RateLimit; samples: Sample[] }) {
+  const [hover, setHover] = useState<HoverPoint | null>(null);
   if (r.limit === 0 || samples.length === 0) return null;
   const last = samples.at(-1)!;
   const recent = recentRate(samples);
@@ -160,56 +163,119 @@ function UsageChart({ r, samples }: { r: RateLimit; samples: Sample[] }) {
   const time = (ms: number) =>
     new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
+  // Nearest sample by time (samples are unevenly spaced); past the last sample, the projected value.
+  const pointAt = (t: number): HoverPoint => {
+    if (rate !== null && t > last.t) {
+      const pt = Math.min(t, projEnd);
+      return { t: pt, used: Math.min(r.limit, last.used + rate * (pt - last.t)), projected: true };
+    }
+    const nearest = samples.reduce((a, b) => (Math.abs(b.t - t) < Math.abs(a.t - t) ? b : a));
+    return { ...nearest, projected: false };
+  };
+  const onPointer = (e: React.PointerEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const f = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    setHover(pointAt(t0 + f * (t1 - t0)));
+  };
+  const hx = hover && (x(hover.t) / W) * 100;
+  const hy = hover && (y(hover.used) / H) * 100;
+
   return (
     <div className="mt-4">
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        preserveAspectRatio="none"
-        className="h-16 w-full overflow-visible"
-        role="img"
-        aria-label={`${r.name} usage history`}
+      <div
+        className="relative"
+        onPointerMove={onPointer}
+        onPointerDown={onPointer}
+        onPointerLeave={() => setHover(null)}
       >
-        <line
-          x1={0}
-          x2={W}
-          y1={0}
-          y2={0}
-          className="stroke-rose-500/50"
-          strokeDasharray="2 3"
-          vectorEffect="non-scaling-stroke"
-        />
-        <line
-          x1={0}
-          x2={W}
-          y1={H}
-          y2={H}
-          className="stroke-zinc-300 dark:stroke-zinc-700"
-          vectorEffect="non-scaling-stroke"
-        />
-        {rate !== null && (
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          preserveAspectRatio="none"
+          className="h-16 w-full overflow-visible"
+          role="img"
+          aria-label={`${r.name} usage history`}
+        >
           <line
-            x1={x(last.t)}
-            y1={y(last.used)}
-            x2={x(projEnd)}
-            y2={y(projUsed)}
-            className="stroke-zinc-400 dark:stroke-zinc-500"
-            strokeDasharray="4 3"
-            strokeWidth={1.5}
+            x1={0}
+            x2={W}
+            y1={0}
+            y2={0}
+            className="stroke-rose-500/50"
+            strokeDasharray="2 3"
             vectorEffect="non-scaling-stroke"
           />
+          <line
+            x1={0}
+            x2={W}
+            y1={H}
+            y2={H}
+            className="stroke-zinc-300 dark:stroke-zinc-700"
+            vectorEffect="non-scaling-stroke"
+          />
+          {rate !== null && (
+            <line
+              x1={x(last.t)}
+              y1={y(last.used)}
+              x2={x(projEnd)}
+              y2={y(projUsed)}
+              className="stroke-zinc-400 dark:stroke-zinc-500"
+              strokeDasharray="4 3"
+              strokeWidth={1.5}
+              vectorEffect="non-scaling-stroke"
+            />
+          )}
+          <polyline
+            points={samples.map((s) => `${x(s.t)},${y(s.used)}`).join(" ")}
+            fill="none"
+            className="stroke-emerald-500"
+            strokeWidth={2}
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
+          />
+          {samples.map((s) => (
+            <circle key={s.t} cx={x(s.t)} cy={y(s.used)} r={1.5} className="fill-emerald-500" />
+          ))}
+          {hover && (
+            <line
+              x1={x(hover.t)}
+              x2={x(hover.t)}
+              y1={0}
+              y2={H}
+              className="stroke-zinc-400/60 dark:stroke-zinc-500/60"
+              vectorEffect="non-scaling-stroke"
+            />
+          )}
+        </svg>
+        {hover && hx !== null && hy !== null && (
+          <>
+            {/* HTML dot so it stays round despite the non-uniform SVG scaling. */}
+            <span
+              className={`pointer-events-none absolute size-2.5 -translate-1/2 rounded-full ring-2 ring-white dark:ring-zinc-900 ${hover.projected ? "bg-zinc-400" : "bg-emerald-500"}`}
+              style={{ left: `${hx}%`, top: `${hy}%` }}
+            />
+            <div
+              role="tooltip"
+              className="pointer-events-none absolute bottom-full z-10 mb-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs whitespace-nowrap shadow-md dark:border-zinc-700 dark:bg-zinc-800"
+              style={{
+                left: `${hx}%`,
+                transform: `translateX(${hx < 20 ? "0" : hx > 80 ? "-100%" : "-50%"})`,
+              }}
+            >
+              <p className="text-zinc-500 dark:text-zinc-400">
+                {new Date(hover.t).toLocaleTimeString()}
+                {hover.projected && " · projected"}
+              </p>
+              <p className="tabular-nums">
+                <span className="font-semibold">{Math.round(hover.used).toLocaleString()}</span>
+                <span className="text-zinc-500 dark:text-zinc-400">
+                  {" "}
+                  used · {Math.round(r.limit - hover.used).toLocaleString()} left
+                </span>
+              </p>
+            </div>
+          </>
         )}
-        <polyline
-          points={samples.map((s) => `${x(s.t)},${y(s.used)}`).join(" ")}
-          fill="none"
-          className="stroke-emerald-500"
-          strokeWidth={2}
-          strokeLinejoin="round"
-          vectorEffect="non-scaling-stroke"
-        />
-        {samples.map((s) => (
-          <circle key={s.t} cx={x(s.t)} cy={y(s.used)} r={1.5} className="fill-emerald-500" />
-        ))}
-      </svg>
+      </div>
       <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-zinc-500 dark:text-zinc-400">
         <dt>Recent</dt>
         <dd className="tabular-nums">
