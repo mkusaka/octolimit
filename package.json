@@ -36,5 +36,5 @@
     "vite-ssr-components": "0.9.0",
     "wrangler": "4.164.0"
   },
-  "packageManager": "bun@1.4.4"
+  "packageManager": "bun@1.4.5"
 }
